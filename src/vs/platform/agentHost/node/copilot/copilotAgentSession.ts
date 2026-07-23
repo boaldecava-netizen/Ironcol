@@ -4253,6 +4253,20 @@ export class CopilotAgentSession extends Disposable {
 
 		this._register(wrapper.onToolPartialResult(e => {
 			this._logService.trace(`[Copilot:${sessionId}] Tool partial result: ${e.data.toolCallId} (${e.data.partialOutput.length} chars)`);
+			const tracked = this._activeToolCalls.get(e.data.toolCallId);
+			if (!tracked || !isShellTool(tracked.toolName)) {
+				return;
+			}
+			// TODO: Use terminal-specific AHP content once live shell output is modeled separately from terminalComplete.preview.
+			this._emitAction({
+				type: ActionType.ChatToolCallContentChanged,
+				turnId: this._turnId,
+				toolCallId: e.data.toolCallId,
+				content: [
+					...tracked.content.filter(content => content.type !== ToolResultContentType.Text),
+					{ type: ToolResultContentType.Text, text: e.data.partialOutput },
+				],
+			}, tracked.parentToolCallId);
 		}));
 
 		this._register(wrapper.onToolProgress(e => {
