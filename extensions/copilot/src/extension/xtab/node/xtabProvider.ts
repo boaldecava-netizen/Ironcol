@@ -1571,6 +1571,7 @@ export class XtabProvider implements IStatelessNextEditProvider {
 				onlyForDocsInPrompt: this.configService.getExperimentBasedConfig(ConfigKey.TeamInternal.InlineEditsXtabDiffOnlyForDocsInPrompt, this.expService),
 				useRelativePaths: this.configService.getExperimentBasedConfig(ConfigKey.TeamInternal.InlineEditsXtabDiffUseRelativePaths, this.expService),
 			},
+			memory: undefined,
 			lintOptions: undefined,
 			includePostScript: true,
 			globalBudget: this.getGlobalBudget(),
