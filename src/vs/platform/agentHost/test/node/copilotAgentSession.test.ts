@@ -827,9 +827,12 @@ suite('CopilotAgentSession', () => {
 		await disconnectStarted.p;
 		try {
 			mockSession.fire('session.shutdown', {
-				shutdownType: 'normal',
+				shutdownType: 'routine',
 				totalApiDurationMs: 0,
-			} as SessionEventPayload<'session.shutdown'>['data']);
+				codeChanges: { filesModified: [], linesAdded: 0, linesRemoved: 0 },
+				modelMetrics: {},
+				sessionStartTime: 0,
+			} satisfies SessionEventPayload<'session.shutdown'>['data']);
 			await destroy;
 			session.dispose();
 
@@ -3122,7 +3125,6 @@ suite('CopilotAgentSession', () => {
 					accessKind: 'read',
 					paths: ['/workspace/src/file.ts'],
 					toolCallId: 'tc-managed',
-					managedApprovalRequired: true,
 					autoApproval: { recommendation: 'approve', reason: 'Low risk' },
 				},
 			});
