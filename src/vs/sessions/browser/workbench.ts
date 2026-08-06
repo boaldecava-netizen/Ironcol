@@ -97,6 +97,8 @@ export interface IWorkbenchOptions {
 
 //#endregion
 
+const MODERN_UI_TABS_CLASS = 'modern-ui-tabs';
+
 //#region Layout Classes
 
 enum LayoutClasses {
@@ -676,7 +678,9 @@ export class Workbench extends Disposable implements IAgentWorkbenchLayoutServic
 		}));
 
 		// Configuration changes
-		this._register(configurationService.onDidChangeConfiguration(e => this.updateFontAliasing(e, configurationService)));
+		this._register(configurationService.onDidChangeConfiguration(e => {
+			this.updateFontAliasing(e, configurationService);
+		}));
 
 		// Font Info
 		if (isNative) {
@@ -714,6 +718,10 @@ export class Workbench extends Disposable implements IAgentWorkbenchLayoutServic
 	//#region Font Aliasing and Caching
 
 	private fontAliasing: 'default' | 'antialiased' | 'none' | 'auto' | undefined;
+	private enableModernUITabs(): void {
+		this.mainContainer.classList.toggle(MODERN_UI_TABS_CLASS, true);
+	}
+
 	private updateFontAliasing(e: IConfigurationChangeEvent | undefined, configurationService: IConfigurationService) {
 		if (!isMacintosh) {
 			return; // macOS only
@@ -905,6 +913,7 @@ export class Workbench extends Disposable implements IAgentWorkbenchLayoutServic
 		]);
 
 		this.mainContainer.classList.add(...workbenchClasses);
+		this.enableModernUITabs();
 
 		// Apply font aliasing
 		this.updateFontAliasing(undefined, configurationService);

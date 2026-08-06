@@ -63,6 +63,7 @@ suite('Sessions - Workbench', () => {
 	const restoreEditorPartOnActivation = Reflect.get(Workbench.prototype, '_restoreEditorPartOnActivation') as (this: ITestWorkbench) => void;
 	const layoutSinglePaneGrid = Reflect.get(SinglePaneWorkbench.prototype, '_layoutGrid') as (this: IContainerResizeTestHarness) => void;
 	const preserveSessionsEditorRatio = Reflect.get(SinglePaneWorkbench.prototype, '_preserveSessionsEditorRatio') as (this: IProportionalResizeTestHarness, previousSessionsWidth: number, previousEditorWidth: number) => void;
+	const enableModernUITabs = Reflect.get(Workbench.prototype, 'enableModernUITabs') as (this: ITestWorkbench) => void;
 
 	// --- Harness ------------------------------------------------------------
 
@@ -235,6 +236,7 @@ suite('Sessions - Workbench', () => {
 						});
 						sideBarNodeVisible = visible;
 					}
+
 					gridVisibility.set(view, visible);
 					visibilityChanges.push(visible);
 					if (visible && sizing?.type === 'distribute') {
@@ -307,6 +309,16 @@ suite('Sessions - Workbench', () => {
 		Object.setPrototypeOf(host, options.single ? SinglePaneWorkbench.prototype : Workbench.prototype);
 		return host as unknown as ITestWorkbench;
 	}
+
+	test('enables modern tabs', () => {
+		const host = createHost();
+
+		enableModernUITabs.call(host);
+
+		assert.deepStrictEqual(host.classToggles, [
+			{ name: 'modern-ui-tabs', force: true },
+		]);
+	});
 
 	// The real SplitView calls `Part.setVisible` when a view's grid visibility
 	// changes, which the workbench maps back onto the desired part visibility.
