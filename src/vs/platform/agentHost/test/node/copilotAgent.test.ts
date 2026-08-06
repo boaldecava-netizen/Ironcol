@@ -33,7 +33,7 @@ import { ITelemetryService } from '../../../telemetry/common/telemetry.js';
 import { NullTelemetryService, NullTelemetryServiceShape } from '../../../telemetry/common/telemetryUtils.js';
 import { AgentHostTelemetryService } from '../../node/agentHostTelemetryService.js';
 import { CopilotCliConfigKey } from '../../common/copilotCliConfig.js';
-import { AgentHostCopilotMultiRootEnabledConfigKey, AgentHostMigrateLegacyCopilotCliEnabledConfigKey, AgentHostPreferLongContextEnabledConfigKey, AgentHostSystemProxyEnabledConfigKey } from '../../common/agentHostSchema.js';
+import { AgentHostCopilotMultiRootEnabledConfigKey, AgentHostManagedPermissionsConfigKey, AgentHostMigrateLegacyCopilotCliEnabledConfigKey, AgentHostPreferLongContextEnabledConfigKey, AgentHostSystemProxyEnabledConfigKey } from '../../common/agentHostSchema.js';
 import { IAgentPluginManager, ISyncedCustomization } from '../../common/agentPluginManager.js';
 import { getTelemetryChatSessionId } from '../../common/agentTelemetryCorrelation.js';
 import { AgentSession, GITHUB_COPILOT_PROTECTED_RESOURCE, type AgentSignal, type IAgentCreateChatForkSource, type IAgentSessionMetadata, type IAgentSpawnChatEvent } from '../../common/agentService.js';
@@ -4453,6 +4453,7 @@ suite('CopilotAgent', () => {
 			_getOrCreateSessionLifetime: (sessionId: string) => { queueSession<T>(task: () => Promise<T>): Promise<T> } | undefined;
 			_forkSdkChat: (client: unknown, sourceEntry: unknown, turnId: string, targetDbDir: URI) => Promise<{ sessionId: string; inheritedTurnCount: number }>;
 			_resolveAgentName: (snapshot: IActiveClientSnapshot, agent: AgentSelection) => string | undefined;
+			_ensureChatSession: (session: URI, chat: URI) => Promise<CopilotAgentSession | undefined>;
 		};
 
 		interface IFakeChatRecorder {
@@ -4496,6 +4497,7 @@ suite('CopilotAgent', () => {
 				handleClientToolCallComplete(): void { },
 				async getNextTurnEventId(): Promise<string | undefined> { return undefined; },
 				getMessages: getMessages ?? (async () => []),
+				async destroySession(): Promise<void> { rec.disposed = true; },
 				dispose(): void { rec.disposed = true; owned?.dispose(); },
 			} as unknown as CopilotAgentSession;
 			return { rec, fake };
@@ -5265,6 +5267,32 @@ suite('CopilotAgent', () => {
 			}
 		});
 
+		test('sendMessage refreshes a peer chat when managed permissions change', async () => {
+			const { agent, configurationService } = createTestAgentContext(disposables);
+			try {
+				const session = AgentSession.uri('copilotcli', 'route-managed-refresh');
+				const chat = URI.parse(buildChatUri(session, 'peer-a'));
+				agent.getOrCreateActiveClient(session, { clientId: 'client-A' }).tools = [];
+				const old = makeFakeChatSession(session, 'sdk-old');
+				const fresh = makeFakeChatSession(session, 'sdk-fresh');
+				let ensureCalls = 0;
+				(agent as unknown as ChatInternals)._ensureChatSession = async () => {
+					ensureCalls++;
+					return ensureCalls === 1 ? old.fake : fresh.fake;
+				};
+
+				configurationService.updateRootConfig({
+					[AgentHostManagedPermissionsConfigKey]: { disableBypassPermissionsMode: 'disable' },
+				});
+				await agent.chats.sendMessage(chat, 'after-policy-change', undefined);
+
+				assert.strictEqual(old.rec.disposed, true);
+				assert.deepStrictEqual(fresh.rec.sends.map(send => send.prompt), ['after-policy-change']);
+			} finally {
+				await disposeAgent(agent);
+			}
+		});
+
 		test('sendMessage throws for a peer chat with no backing chat', async () => {
 			const agent = createTestAgent(disposables);
 			try {
@@ -5793,6 +5821,27 @@ suite('CopilotAgent', () => {
 				// A genuinely different tool set (added tool) must restart so the
 				// SDK session is rebuilt with the new tools.
 				agent.getOrCreateActiveClient(session, { clientId: 'client-A' }).tools = [...tools, { name: 'second_tool', description: 'another', inputSchema: { type: 'object', properties: {} } }];
+
+				assert.strictEqual(await activeClient.requiresRestart(appliedSnapshot), true);
+			} finally {
+				await disposeAgent(agent);
+			}
+		});
+
+		test('a managed-permissions policy change requires a restart', async () => {
+			const { agent, configurationService } = createTestAgentContext(disposables);
+			try {
+				const session = AgentSession.uri('copilotcli', 'managed-perms-change-session');
+
+				agent.getOrCreateActiveClient(session, { clientId: 'client-A' }).tools = tools;
+				const activeClient = getActiveClient(agent, session);
+				const appliedSnapshot = await activeClient.snapshot();
+				assert.strictEqual(await activeClient.requiresRestart(appliedSnapshot), false);
+
+				// An enterprise policy change updates the forwarded managed
+				// permissions; the SDK session must restart so the new
+				// `managedSettings.permissions` apply before the next turn.
+				configurationService.updateRootConfig({ [AgentHostManagedPermissionsConfigKey]: { disableBypassPermissionsMode: 'disable' } });
 
 				assert.strictEqual(await activeClient.requiresRestart(appliedSnapshot), true);
 			} finally {
