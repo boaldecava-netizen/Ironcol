@@ -4617,6 +4617,8 @@
           "github.copilot.chat.workspace.prototypeAdoCodeSearchEndpointOverride": {
             "type": "string",
             "default": "",
+            "scope": "application",
+            "restricted": true,
             "markdownDescription": "%github.copilot.config.workspace.prototypeAdoCodeSearchEndpointOverride%",
             "tags": [
               "advanced",
