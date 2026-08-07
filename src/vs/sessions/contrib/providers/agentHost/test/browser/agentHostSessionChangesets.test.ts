@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { isLinux } from '../../../../../../base/common/platform.js';
 import { URI } from '../../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../../base/test/common/utils.js';
 import { IChatSessionFileChange2 } from '../../../../../../workbench/contrib/chat/common/chatSessionsService.js';
@@ -23,6 +24,19 @@ suite('AgentHostSessionChangesets', () => {
 			originalUri: undefined,
 			insertions: 1,
 			deletions: 0,
+		} satisfies IChatSessionFileChange2;
+	}
+
+	// A deletion genuinely omits `modifiedUri` (the file no longer exists), so it
+	// is identified solely by `uri`. `makeChange(uri, undefined)` cannot express
+	// this because the `= uri` default fires for an `undefined` argument.
+	function makeDeletion(uri: string): ISessionFileChange {
+		return {
+			uri: URI.parse(uri),
+			modifiedUri: undefined,
+			originalUri: URI.parse(uri),
+			insertions: 0,
+			deletions: 1,
 		} satisfies IChatSessionFileChange2;
 	}
 
@@ -84,31 +98,45 @@ suite('AgentHostSessionChangesets', () => {
 
 		test('deletions (no modifiedUri) are classified by their file uri', () => {
 			const changes = [
-				makeChange('file:///repo/primary/gone.ts', undefined),
-				makeChange('file:///repo/other/gone.ts', undefined),
+				makeDeletion('file:///repo/primary/gone.ts'),
+				makeDeletion('file:///repo/other/gone.ts'),
 			];
+
+			// Guard the fixture itself: a real deletion must omit `modifiedUri`.
+			assert.strictEqual((changes[0] as IChatSessionFileChange2).modifiedUri, undefined);
 
 			const result = filterChangesToPrimaryWorkingDirectory(changes, ['file:///repo/primary', 'file:///repo/other']);
 
 			assert.deepStrictEqual(uris(result), ['file:///repo/primary/gone.ts']);
 		});
 
-		test('applies the uri mapper to the primary directory so mapped changes still match', () => {
-			// Simulates a remote provider: the changes have already been mapped
-			// (e.g. `file:` -> `agent-host:`) while the working directories are the
-			// host's raw `file:` URIs. Without mapping the primary directory the
-			// schemes differ and every change is dropped.
-			const mapUri = (uri: URI): URI => uri.scheme === 'file'
-				? URI.from({ scheme: 'agent-host', authority: 'server', path: uri.path })
-				: uri;
+		test('compares mapped (agent-host) changes by their preserved file path', () => {
+			// Simulates a remote provider: changes have already been mapped
+			// (`file:` -> `agent-host:`) while the working directories remain the
+			// host's raw `file:` URIs. The path is preserved through the mapping, so
+			// the in-scope change still matches without any mapper being threaded in.
 			const changes = [
 				makeChange('agent-host://server/repo/primary/a.ts'),
 				makeChange('agent-host://server/repo/other/b.ts'),
 			];
 
-			const result = filterChangesToPrimaryWorkingDirectory(changes, ['file:///repo/primary', 'file:///repo/other'], mapUri);
+			const result = filterChangesToPrimaryWorkingDirectory(changes, ['file:///repo/primary', 'file:///repo/other']);
 
 			assert.deepStrictEqual(uris(result), ['agent-host://server/repo/primary/a.ts']);
+		});
+
+		test('case-differing sibling roots are not conflated (file-path case semantics)', () => {
+			// A change under `/repo/app` must NOT be treated as under the primary
+			// `/repo/App`. Comparing on the `file:` scheme keeps platform case
+			// semantics rather than the case-insensitive bias applied to non-`file:`
+			// schemes. (Assertion holds on case-sensitive platforms.)
+			if (isLinux) {
+				const changes = [makeChange('agent-host://server/repo/app/x.ts')];
+
+				const result = filterChangesToPrimaryWorkingDirectory(changes, ['file:///repo/App', 'file:///repo/other']);
+
+				assert.deepStrictEqual(uris(result), []);
+			}
 		});
 	});
 });

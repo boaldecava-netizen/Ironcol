@@ -52,24 +52,22 @@ function sessionFileChangeUri(change: ISessionFileChange): URI {
  *
  * The Agents Window "Last Turn Changes" tree roots at the primary working
  * directory, so restricting to files under it keeps the tree renderable with
- * proper relative paths and excludes sibling-folder edits that would otherwise
- * render with degenerate paths. This is a pure, side-effect-free predicate so
- * it can be unit-tested without observables or services.
+ * proper relative paths. This is a pure, side-effect-free predicate.
  *
- * `mapUri`, when provided, is applied to the primary directory so it is compared
- * in the same URI space as the changes (which have already had the adapter's
- * diff-URI mapper applied); without it a remote `agent-host:` change would never
- * match a raw `file:` directory and the filter would drop everything.
+ * A change URI keeps the workspace file path verbatim even when the adapter has
+ * wrapped it as `agent-host:`, so each change is compared by rebuilding it on the
+ * primary directory's (`file:`) scheme. This both aligns schemes (a raw `file:`
+ * directory would never match a mapped `agent-host:` change) and keeps file-path
+ * case semantics (the scheme-biased comparer treats non-`file:` paths as
+ * case-insensitive, which would wrongly match case-differing sibling roots).
  *
  * @param changes The unfiltered last-turn changes.
  * @param workingDirectories The session's ordered working directories, as URI
  *   strings (index 0 is the primary directory).
- * @param mapUri Optional mapper matching the one applied to the changes.
  */
 export function filterChangesToPrimaryWorkingDirectory(
 	changes: readonly ISessionFileChange[],
-	workingDirectories: readonly string[] | undefined,
-	mapUri?: (uri: URI) => URI
+	workingDirectories: readonly string[] | undefined
 ): readonly ISessionFileChange[] {
 	if (!isMultiRootSession(workingDirectories)) {
 		return changes;
@@ -80,10 +78,11 @@ export function filterChangesToPrimaryWorkingDirectory(
 		return changes;
 	}
 
-	const parsedPrimary = URI.parse(primary);
-	const primaryWorkingDirectory = mapUri ? mapUri(parsedPrimary) : parsedPrimary;
+	const primaryWorkingDirectory = URI.parse(primary);
 	return changes.filter(change =>
-		extUriBiasedIgnorePathCase.isEqualOrParent(sessionFileChangeUri(change), primaryWorkingDirectory));
+		extUriBiasedIgnorePathCase.isEqualOrParent(
+			primaryWorkingDirectory.with({ path: sessionFileChangeUri(change).path }),
+			primaryWorkingDirectory));
 }
 
 export function createChangesets(
@@ -469,13 +468,6 @@ class AgentHostLastTurnChangeset extends AbstractAgentHostChangeset {
 	 */
 	private readonly _workingDirectoriesObs: IObservable<readonly string[] | undefined>;
 
-	/**
-	 * The adapter's diff-URI mapper, captured because the base `_options` is
-	 * private. Applied to the primary directory so it is compared in the same
-	 * URI space as the (already-mapped) changes.
-	 */
-	private readonly _mapDiffUri?: (uri: URI) => URI;
-
 	constructor(
 		sessionUri: URI,
 		options: IAgentHostAdapterOptions,
@@ -486,7 +478,6 @@ class AgentHostLastTurnChangeset extends AbstractAgentHostChangeset {
 		super(changesetSummary, options, dialogService);
 
 		this.id = changesetSummary.changeKind;
-		this._mapDiffUri = options.mapDiffUri;
 
 		// Turns moved off the session and onto a per-chat channel with the
 		// multi-chat protocol. Subscribe to the session to discover its
@@ -562,6 +553,6 @@ class AgentHostLastTurnChangeset extends AbstractAgentHostChangeset {
 	 * {@link filterChangesToPrimaryWorkingDirectory} returns the input unchanged.
 	 */
 	protected override _filterChanges(changes: readonly ISessionFileChange[], reader: IReader): readonly ISessionFileChange[] {
-		return filterChangesToPrimaryWorkingDirectory(changes, this._workingDirectoriesObs.read(reader), this._mapDiffUri);
+		return filterChangesToPrimaryWorkingDirectory(changes, this._workingDirectoriesObs.read(reader));
 	}
 }
