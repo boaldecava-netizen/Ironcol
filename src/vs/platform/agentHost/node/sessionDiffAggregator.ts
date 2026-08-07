@@ -392,31 +392,10 @@ function isPathWithinFolderScope(filePath: string, folderRoots: readonly URI[]):
 }
 
 /**
- * Computes the diff statistics for a single turn — files touched only
- * within `turnId`, with their `before` snapshot taken from the first edit
- * record in that turn and their `after` snapshot from the last. Used by
- * the per-turn changeset (`<session>/changeset/turn/<turnId>`).
- *
- * When {@link folderScope} is omitted (or `undefined`) the behavior is
- * unchanged: every edit recorded for the turn contributes. When it is
- * provided, only edits whose terminal file path (`filePath`) is equal-or-under
- * one of the supplied absolute folder roots are included — the "non-git
- * partition" primitive (spec Q1 / AC-2.3): callers pass the session's NON-git
- * folder roots so DB-tracked edits contribute only for non-git folders (git
- * folders are covered by git diffs, avoiding a double count). Passing an empty
- * array therefore excludes every edit.
- *
- * The scope filter is applied to the raw edit records by their `filePath`
- * before the identity graph is built. Because a rename record's `filePath` is
- * its after-path, a rename is judged by its destination: a rename that moves a
- * file *into* scope is kept (and reported at its in-scope terminal path) while
- * a rename that moves a file *out of* scope is dropped. This guarantees every
- * returned diff's terminal path lies within scope.
- *
- * Does not change the returned {@link ISessionFileDiff} shape or its
- * `session-db:` content URIs.
- *
- * Returns an empty array when the turn touched no files (in scope).
+ * Computes per-file diff stats for a single turn, following rename chains. When
+ * `folderScope` is provided, only files whose final path is within one of those
+ * absolute roots are returned (an empty scope returns none); omitting it returns
+ * every file touched in the turn.
  */
 export async function computeTurnDiffs(
 	sessionUri: string,
@@ -426,20 +405,18 @@ export async function computeTurnDiffs(
 	folderScope?: readonly URI[],
 ): Promise<ISessionFileDiff[]> {
 	const turnEdits = await db.getFileEditsByTurn(turnId);
-	// Restrict to in-scope edits when a folder scope is supplied; otherwise keep
-	// every edit so existing callers observe today's behavior exactly.
-	const edits = folderScope
-		? turnEdits.filter(edit => isPathWithinFolderScope(edit.filePath, folderScope))
-		: turnEdits;
-	if (edits.length === 0) {
+	if (turnEdits.length === 0) {
 		return [];
 	}
 
 	// Build identity graph for this turn only — same algorithm as
-	// `computeSessionDiffs` but scoped to a single turn's edits.
+	// `computeSessionDiffs` but scoped to a single turn's edits. Identities are
+	// built from ALL of the turn's edits (not a pre-filtered subset) so rename
+	// chains stay intact; `folderScope` is applied per-identity below, by the
+	// identity's final `terminalPath`.
 	const pathToIdentityKey = new Map<string, string>();
 	const identities = new Map<string, IFileIdentity>();
-	for (const edit of edits) {
+	for (const edit of turnEdits) {
 		let identityKey: string;
 		if (edit.kind === FileEditKind.Rename && edit.originalPath) {
 			identityKey = pathToIdentityKey.get(edit.originalPath) ?? edit.originalPath;
@@ -473,6 +450,13 @@ export async function computeTurnDiffs(
 	const results: ISessionFileDiff[] = [];
 	const diffPromises: Promise<void>[] = [];
 	for (const identity of identities.values()) {
+		// Apply the folder scope by the identity's FINAL path, so a rename that
+		// lands in scope is kept (with its full before/after chain) and one that
+		// leaves scope is dropped. Skipping here — rather than pre-filtering the
+		// raw records — keeps rename chains intact.
+		if (folderScope && !isPathWithinFolderScope(identity.terminalPath, folderScope)) {
+			continue;
+		}
 		diffPromises.push((async () => {
 			let beforeText: string;
 			if (identity.firstKind === FileEditKind.Create) {

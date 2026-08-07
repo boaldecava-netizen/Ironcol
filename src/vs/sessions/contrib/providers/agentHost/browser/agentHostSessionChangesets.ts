@@ -56,13 +56,20 @@ function sessionFileChangeUri(change: ISessionFileChange): URI {
  * render with degenerate paths. This is a pure, side-effect-free predicate so
  * it can be unit-tested without observables or services.
  *
+ * `mapUri`, when provided, is applied to the primary directory so it is compared
+ * in the same URI space as the changes (which have already had the adapter's
+ * diff-URI mapper applied); without it a remote `agent-host:` change would never
+ * match a raw `file:` directory and the filter would drop everything.
+ *
  * @param changes The unfiltered last-turn changes.
  * @param workingDirectories The session's ordered working directories, as URI
  *   strings (index 0 is the primary directory).
+ * @param mapUri Optional mapper matching the one applied to the changes.
  */
 export function filterChangesToPrimaryWorkingDirectory(
 	changes: readonly ISessionFileChange[],
-	workingDirectories: readonly string[] | undefined
+	workingDirectories: readonly string[] | undefined,
+	mapUri?: (uri: URI) => URI
 ): readonly ISessionFileChange[] {
 	if (!isMultiRootSession(workingDirectories)) {
 		return changes;
@@ -73,7 +80,8 @@ export function filterChangesToPrimaryWorkingDirectory(
 		return changes;
 	}
 
-	const primaryWorkingDirectory = URI.parse(primary);
+	const parsedPrimary = URI.parse(primary);
+	const primaryWorkingDirectory = mapUri ? mapUri(parsedPrimary) : parsedPrimary;
 	return changes.filter(change =>
 		extUriBiasedIgnorePathCase.isEqualOrParent(sessionFileChangeUri(change), primaryWorkingDirectory));
 }
@@ -461,6 +469,13 @@ class AgentHostLastTurnChangeset extends AbstractAgentHostChangeset {
 	 */
 	private readonly _workingDirectoriesObs: IObservable<readonly string[] | undefined>;
 
+	/**
+	 * The adapter's diff-URI mapper, captured because the base `_options` is
+	 * private. Applied to the primary directory so it is compared in the same
+	 * URI space as the (already-mapped) changes.
+	 */
+	private readonly _mapDiffUri?: (uri: URI) => URI;
+
 	constructor(
 		sessionUri: URI,
 		options: IAgentHostAdapterOptions,
@@ -471,6 +486,7 @@ class AgentHostLastTurnChangeset extends AbstractAgentHostChangeset {
 		super(changesetSummary, options, dialogService);
 
 		this.id = changesetSummary.changeKind;
+		this._mapDiffUri = options.mapDiffUri;
 
 		// Turns moved off the session and onto a per-chat channel with the
 		// multi-chat protocol. Subscribe to the session to discover its
@@ -546,6 +562,6 @@ class AgentHostLastTurnChangeset extends AbstractAgentHostChangeset {
 	 * {@link filterChangesToPrimaryWorkingDirectory} returns the input unchanged.
 	 */
 	protected override _filterChanges(changes: readonly ISessionFileChange[], reader: IReader): readonly ISessionFileChange[] {
-		return filterChangesToPrimaryWorkingDirectory(changes, this._workingDirectoriesObs.read(reader));
+		return filterChangesToPrimaryWorkingDirectory(changes, this._workingDirectoriesObs.read(reader), this._mapDiffUri);
 	}
 }

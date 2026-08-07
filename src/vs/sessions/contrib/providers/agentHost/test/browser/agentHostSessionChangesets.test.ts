@@ -92,5 +92,23 @@ suite('AgentHostSessionChangesets', () => {
 
 			assert.deepStrictEqual(uris(result), ['file:///repo/primary/gone.ts']);
 		});
+
+		test('applies the uri mapper to the primary directory so mapped changes still match', () => {
+			// Simulates a remote provider: the changes have already been mapped
+			// (e.g. `file:` -> `agent-host:`) while the working directories are the
+			// host's raw `file:` URIs. Without mapping the primary directory the
+			// schemes differ and every change is dropped.
+			const mapUri = (uri: URI): URI => uri.scheme === 'file'
+				? URI.from({ scheme: 'agent-host', authority: 'server', path: uri.path })
+				: uri;
+			const changes = [
+				makeChange('agent-host://server/repo/primary/a.ts'),
+				makeChange('agent-host://server/repo/other/b.ts'),
+			];
+
+			const result = filterChangesToPrimaryWorkingDirectory(changes, ['file:///repo/primary', 'file:///repo/other'], mapUri);
+
+			assert.deepStrictEqual(uris(result), ['agent-host://server/repo/primary/a.ts']);
+		});
 	});
 });

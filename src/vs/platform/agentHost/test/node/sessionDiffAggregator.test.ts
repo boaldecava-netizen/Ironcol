@@ -698,6 +698,57 @@ suite('computeTurnDiffs', () => {
 		assert.strictEqual(del.after, undefined, 'delete has no after');
 	});
 
+	test('folderScope: rename chains are followed before scoping — in-scope edit then rename OUT of scope reports nothing (no stale path)', async () => {
+		const db = new TestSessionDatabase();
+		// Same logical file: edited while in scope A, then renamed out to B.
+		db.addEdit({
+			turnId: 't1', toolCallId: 'tc1', filePath: '/repo/a/x.txt', kind: FileEditKind.Edit,
+			addedLines: undefined, removedLines: undefined,
+			beforeContent: encodeString('1'), afterContent: encodeString('1\n2'),
+		});
+		db.addEdit({
+			turnId: 't1', toolCallId: 'tc2', filePath: '/repo/b/x.txt', kind: FileEditKind.Rename,
+			originalPath: '/repo/a/x.txt',
+			addedLines: undefined, removedLines: undefined,
+			beforeContent: encodeString('1\n2'), afterContent: encodeString('1\n2\n3'),
+		});
+
+		const result = await computeTurnDiffs(
+			TEST_SESSION_URI, db, createTestDiffService(), 't1', [URI.file('/repo/a')],
+		);
+
+		// The identity's final path is /repo/b/x.txt (out of scope), so the file
+		// is dropped entirely. Pre-filtering raw records (the previous bug) would
+		// have kept the in-scope edit record and reported a stale /repo/a/x.txt.
+		assert.deepStrictEqual(result.map(simplify), []);
+	});
+
+	test('folderScope: rename chains are followed before scoping — edit OUT of scope then rename INTO scope keeps the full before/after chain', async () => {
+		const db = new TestSessionDatabase();
+		// Same logical file: edited while out of scope (B), then renamed into A.
+		db.addEdit({
+			turnId: 't1', toolCallId: 'tc1', filePath: '/repo/b/y.txt', kind: FileEditKind.Edit,
+			addedLines: undefined, removedLines: undefined,
+			beforeContent: encodeString('1'), afterContent: encodeString('1\n2'),
+		});
+		db.addEdit({
+			turnId: 't1', toolCallId: 'tc2', filePath: '/repo/a/y.txt', kind: FileEditKind.Rename,
+			originalPath: '/repo/b/y.txt',
+			addedLines: undefined, removedLines: undefined,
+			beforeContent: encodeString('1\n2'), afterContent: encodeString('1\n2\n3'),
+		});
+
+		const result = await computeTurnDiffs(
+			TEST_SESSION_URI, db, createTestDiffService(), 't1', [URI.file('/repo/a')],
+		);
+
+		// Reported at its in-scope terminal path /repo/a/y.txt with `before` taken
+		// from the pre-rename edit (content '1', one line) -> `added` is 2. Pre-
+		// filtering (the previous bug) dropped the out-of-scope edit, losing the
+		// before snapshot (empty), which would have reported `added` 3.
+		assert.deepStrictEqual(result.map(simplify), [simpleDiff('/repo/a/y.txt', 2, 0)]);
+	});
+
 	test('folderScope: a file path exactly at a folder root is kept', async () => {
 		const db = new TestSessionDatabase();
 		db.addEdit({
