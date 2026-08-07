@@ -309,6 +309,8 @@ export interface IVoiceSessionContext {
 		/** Which frontend session surface owns this conversation. */
 		session_type?: 'agent' | 'chat';
 		is_active: boolean;
+		/** Omni routing decision for backend narration of the selected target. */
+		omni_route?: 'existing_session' | 'new_session';
 		agent_state: string;
 		agent_state_detail?: string;
 		confirmation_type?: VoiceConfirmationType;
