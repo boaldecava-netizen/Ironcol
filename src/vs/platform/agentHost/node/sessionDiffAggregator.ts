@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { URI } from '../../../base/common/uri.js';
+import { extUriBiasedIgnorePathCase } from '../../../base/common/resources.js';
 import type { IFileEditRecord, ISessionDatabase } from '../common/sessionDataService.js';
 import type { IDiffComputeService } from '../common/diffComputeService.js';
 import { FileEditKind, type ISessionFileDiff } from '../common/state/sessionState.js';
@@ -377,20 +378,59 @@ export async function computeUnionedDiffs(
 }
 
 /**
+ * Returns `true` when `filePath` — an absolute OS path taken verbatim from an
+ * {@link IFileEditRecord} (`file_edits.file_path` values are absolute by
+ * contract) — is equal to, or nested under, any of the given `folderRoots`.
+ *
+ * Containment is delegated to {@link extUriBiasedIgnorePathCase} so the check
+ * honors the platform's path-casing bias (case-insensitive on Windows/macOS,
+ * case-sensitive elsewhere) rather than doing a naive string prefix compare.
+ */
+function isPathWithinFolderScope(filePath: string, folderRoots: readonly URI[]): boolean {
+	const fileUri = URI.file(filePath);
+	return folderRoots.some(root => extUriBiasedIgnorePathCase.isEqualOrParent(fileUri, root));
+}
+
+/**
  * Computes the diff statistics for a single turn — files touched only
  * within `turnId`, with their `before` snapshot taken from the first edit
  * record in that turn and their `after` snapshot from the last. Used by
  * the per-turn changeset (`<session>/changeset/turn/<turnId>`).
  *
- * Returns an empty array when the turn touched no files.
+ * When {@link folderScope} is omitted (or `undefined`) the behavior is
+ * unchanged: every edit recorded for the turn contributes. When it is
+ * provided, only edits whose terminal file path (`filePath`) is equal-or-under
+ * one of the supplied absolute folder roots are included — the "non-git
+ * partition" primitive (spec Q1 / AC-2.3): callers pass the session's NON-git
+ * folder roots so DB-tracked edits contribute only for non-git folders (git
+ * folders are covered by git diffs, avoiding a double count). Passing an empty
+ * array therefore excludes every edit.
+ *
+ * The scope filter is applied to the raw edit records by their `filePath`
+ * before the identity graph is built. Because a rename record's `filePath` is
+ * its after-path, a rename is judged by its destination: a rename that moves a
+ * file *into* scope is kept (and reported at its in-scope terminal path) while
+ * a rename that moves a file *out of* scope is dropped. This guarantees every
+ * returned diff's terminal path lies within scope.
+ *
+ * Does not change the returned {@link ISessionFileDiff} shape or its
+ * `session-db:` content URIs.
+ *
+ * Returns an empty array when the turn touched no files (in scope).
  */
 export async function computeTurnDiffs(
 	sessionUri: string,
 	db: ISessionDatabase,
 	diffService: IDiffComputeService,
 	turnId: string,
+	folderScope?: readonly URI[],
 ): Promise<ISessionFileDiff[]> {
-	const edits = await db.getFileEditsByTurn(turnId);
+	const turnEdits = await db.getFileEditsByTurn(turnId);
+	// Restrict to in-scope edits when a folder scope is supplied; otherwise keep
+	// every edit so existing callers observe today's behavior exactly.
+	const edits = folderScope
+		? turnEdits.filter(edit => isPathWithinFolderScope(edit.filePath, folderScope))
+		: turnEdits;
 	if (edits.length === 0) {
 		return [];
 	}
