@@ -43,6 +43,7 @@ import { AgentConfigurationService, IAgentConfigurationService } from './agentCo
 import { AgentHostTerminalManager, IAgentHostTerminalManager } from './agentHostTerminalManager.js';
 import { ISessionDbUriFields, parseSessionDbUri } from '../common/sessionDbUri.js';
 import { IGitBlobUriFields, parseGitBlobUri } from './gitDiffContent.js';
+import { selectRepositoryRootForBlobPath } from '../common/agentHostWorkingDirectories.js';
 import { AgentHostStateManager, IAgentHostStateManager } from './agentHostStateManager.js';
 import { IAgentHostGitService, tryResolvePrimaryWorktreeRoot } from '../common/agentHostGitService.js';
 import { AgentSideEffects } from './agentSideEffects.js';
@@ -4187,11 +4188,11 @@ export class AgentService extends Disposable implements IAgentService {
 		if (!this._gitService) {
 			throw new ProtocolError(AhpErrorCodes.NotFound, `git service unavailable for: ${fields.repoRelativePath}`);
 		}
-		const workingDirectory = this._stateManager.getSessionState(fields.sessionUri)?.workingDirectories?.[0];
+		const workingDirectory = await this._resolveGitBlobWorkingDirectory(fields);
 		if (!workingDirectory) {
 			throw new ProtocolError(AhpErrorCodes.NotFound, `Session has no working directory for git-blob URI: ${fields.sessionUri}`);
 		}
-		const blob = await this._gitService.showBlob(URI.parse(workingDirectory), fields.sha, fields.repoRelativePath);
+		const blob = await this._gitService.showBlob(workingDirectory, fields.sha, fields.repoRelativePath);
 		if (!blob) {
 			throw new ProtocolError(AhpErrorCodes.NotFound, `git blob not found: ${fields.sha}:${fields.repoRelativePath}`);
 		}
@@ -4200,6 +4201,38 @@ export class AgentService extends Disposable implements IAgentService {
 			encoding: ContentEncoding.Utf8,
 			contentType: 'text/plain',
 		};
+	}
+
+	/** Resolves the server-trusted repository root used to read a `git-blob:` resource. */
+	private async _resolveGitBlobWorkingDirectory(fields: IGitBlobUriFields): Promise<URI | undefined> {
+		const dirs = this._configurationService.getEffectiveWorkingDirectories(fields.sessionUri);
+		const isMultiFolderCopilot = AgentSession.provider(fields.sessionUri) === 'copilotcli' && !!dirs && dirs.length > 1;
+
+		if (!isMultiFolderCopilot) {
+			const primary = this._stateManager.getSessionState(fields.sessionUri)?.workingDirectories?.[0];
+			return primary ? URI.parse(primary) : undefined;
+		}
+
+		const repoRoots: URI[] = [];
+		const seen = new Set<string>();
+		await Promise.all(dirs!.map(async dir => {
+			try {
+				const root = await this._gitService!.getRepositoryRoot(URI.parse(dir));
+				if (root) {
+					const key = extUriBiasedIgnorePathCase.getComparisonKey(root);
+					if (!seen.has(key)) {
+						seen.add(key);
+						repoRoots.push(root);
+					}
+				}
+			} catch {
+				// Another repository root may still own the blob.
+			}
+		}));
+		if (repoRoots.length === 0) {
+			return undefined;
+		}
+		return selectRepositoryRootForBlobPath(fields.absolutePath, repoRoots);
 	}
 
 	/**
